@@ -2,14 +2,20 @@ const nodemailer = require('nodemailer');
 
 const sendEmail = async (options) => {
     try {
+        const port = parseInt(process.env.SMTP_PORT) || 587;
         const transporter = nodemailer.createTransport({
             host: process.env.SMTP_HOST || 'smtp.gmail.com',
-            port: process.env.SMTP_PORT || 465,
-            secure: process.env.SMTP_PORT === '465' || process.env.SMTP_PORT == 465, // true for port 465, false for 587
+            port: port,
+            secure: port === 465, // true for 465, false for other ports like 587
+            requireTLS: true, // Forces TLS for port 587
             auth: {
                 user: process.env.SMTP_USER,
                 pass: process.env.SMTP_PASS, // MUST be a 16-character Gmail App Password
             },
+            tls: {
+                // Do not fail on invalid certs (sometimes useful in strict environments)
+                rejectUnauthorized: false
+            }
         });
 
         const message = {
