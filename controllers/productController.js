@@ -76,7 +76,7 @@ exports.createProduct = async (req, res) => {
                     const uniqueEmails = [...new Set(emails)];
 
                     if (uniqueEmails.length > 0) {
-                        const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+                        const clientUrl = process.env.CLIENT_URL || 'https://purepetfrontend.onrender.com';
                         const productUrl = `${clientUrl}/products`;
 
                         // Construct Price String (If the schema handles price later or if passed in req.body.price but not saved)
