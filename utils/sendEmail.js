@@ -1,5 +1,9 @@
 const nodemailer = require('nodemailer');
+const dns = require('dns');
 
+// Force Node.js DNS to resolve IPv4 addresses before IPv6.
+// Render completely drops unassigned IPv6 outbound connections, causing ENETUNREACH.
+dns.setDefaultResultOrder('ipv4first');
 const sendEmail = async (options) => {
     try {
         // Overriding the environment variable port to 465.
