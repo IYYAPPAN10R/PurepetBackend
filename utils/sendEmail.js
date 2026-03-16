@@ -2,12 +2,13 @@ const nodemailer = require('nodemailer');
 
 const sendEmail = async (options) => {
     try {
-        const port = parseInt(process.env.SMTP_PORT) || 587;
+        // Overriding the environment variable port to 465.
+        // Render extensively blocks or drops STARTTLS (587) and 25 egress traffic.
+        const port = 465; 
         const transporter = nodemailer.createTransport({
             host: process.env.SMTP_HOST || 'smtp.gmail.com',
             port: port,
-            secure: port === 465, // true for 465, false for other ports like 587
-            requireTLS: true, // Forces TLS for port 587
+            secure: true, // true enforces standard SMTPS over 465, which bypassing firewalls more cleanly
             auth: {
                 user: process.env.SMTP_USER,
                 pass: process.env.SMTP_PASS, // MUST be a 16-character Gmail App Password
