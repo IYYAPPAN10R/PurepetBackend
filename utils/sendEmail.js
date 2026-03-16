@@ -21,8 +21,12 @@ const sendEmail = async (options) => {
                 // Do not fail on invalid certs (sometimes useful in strict environments)
                 rejectUnauthorized: false
             },
-            // Force IPv4 because Render free instances often drop IPv6 outbound connections
-            family: 4 
+            // Hard-enforce IPv4 DNS lookup bypassing Node's underlying socket defaults
+            lookup: (hostname, options, callback) => {
+                dns.lookup(hostname, { family: 4 }, (err, address, family) => {
+                    callback(err, address, family);
+                });
+            }
         });
 
         const message = {
