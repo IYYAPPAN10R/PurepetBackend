@@ -1,47 +1,35 @@
-const nodemailer = require('nodemailer');
-const dns = require('dns');
+const { Resend } = require('resend');
 
-// Force Node.js DNS to resolve IPv4 addresses before IPv6.
-// Render completely drops unassigned IPv6 outbound connections, causing ENETUNREACH.
-dns.setDefaultResultOrder('ipv4first');
+// Initialize Resend with API Key from environment variables
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+/**
+ * Send email using Resend API
+ * @param {Object} options - Email options (to, subject, html)
+ */
 const sendEmail = async (options) => {
     try {
-        // Overriding the environment variable port to 465.
-        // Render extensively blocks or drops STARTTLS (587) and 25 egress traffic.
-        const port = 465; 
-        const transporter = nodemailer.createTransport({
-            host: process.env.SMTP_HOST || 'smtp.gmail.com',
-            port: port,
-            secure: true, // true enforces standard SMTPS over 465, which bypassing firewalls more cleanly
-            auth: {
-                user: process.env.SMTP_USER,
-                pass: process.env.SMTP_PASS, // MUST be a 16-character Gmail App Password
-            },
-            tls: {
-                // Do not fail on invalid certs (sometimes useful in strict environments)
-                rejectUnauthorized: false
-            },
-            // Hard-enforce IPv4 DNS lookup bypassing Node's underlying socket defaults
-            lookup: (hostname, options, callback) => {
-                dns.lookup(hostname, { family: 4 }, (err, address, family) => {
-                    callback(err, address, family);
-                });
-            }
-        });
+        const fromName = process.env.FROM_NAME || 'PurePet Solutions';
+        // Note: Resend requires a verified domain or uses onboarding@resend.dev for testing
+        // Once you verify your domain, you can change this to your custom email.
+        const fromEmail = 'onboarding@resend.dev'; 
 
-        const message = {
-            from: `${process.env.FROM_NAME || 'PurePet Solutions'} <${process.env.FROM_EMAIL || process.env.SMTP_USER}>`,
+        const { data, error } = await resend.emails.send({
+            from: `${fromName} <${fromEmail}>`,
             to: options.to,
-            bcc: options.bcc, // useful for sending to multiple users privately
             subject: options.subject,
             html: options.html,
-        };
+        });
 
-        const info = await transporter.sendMail(message);
-        console.log('Email sent: %s', info.messageId);
+        if (error) {
+            console.error('Resend API Error:', error);
+            return false;
+        }
+
+        console.log('Email sent successfully via Resend:', data.id);
         return true;
     } catch (error) {
-        console.error('Email could not be sent', error);
+        console.error('Unexpected error sending email:', error);
         return false;
     }
 };
