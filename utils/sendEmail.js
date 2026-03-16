@@ -15,7 +15,9 @@ const sendEmail = async (options) => {
             tls: {
                 // Do not fail on invalid certs (sometimes useful in strict environments)
                 rejectUnauthorized: false
-            }
+            },
+            // Force IPv4 because Render free instances often drop IPv6 outbound connections
+            family: 4 
         });
 
         const message = {
