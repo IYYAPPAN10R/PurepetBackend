@@ -11,6 +11,32 @@ exports.createOrder = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Customer name, email, address and at least one item are required.' });
         }
 
+        // 1. Validate Stock Availability & Prepare Deductions
+        for (const item of items) {
+            const product = await Product.findById(item.productId);
+            if (!product) {
+                return res.status(404).json({ success: false, message: `Product ${item.productName} not found.` });
+            }
+            if (product.countInStock < item.quantity) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: `Insufficient stock for ${product.name}. Available: ${product.countInStock}` 
+                });
+            }
+        }
+
+        // 2. Actually Deduct Stock
+        for (const item of items) {
+            await Product.findByIdAndUpdate(item.productId, {
+                $inc: { countInStock: -item.quantity },
+                // We'll calculate the new inStock in the next step or just trust countInStock logic added to controllers
+            });
+            // Update inStock status manually here to be safe
+            const updatedProduct = await Product.findById(item.productId);
+            updatedProduct.inStock = updatedProduct.countInStock > 0;
+            await updatedProduct.save();
+        }
+
         const order = await Order.create({
             userId: req.user?._id || null,
             customerName,
@@ -150,12 +176,43 @@ exports.updateOrderStatus = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid status value.' });
         }
 
+        const orderBeforeUpdate = await Order.findById(req.params.id);
+        if (!orderBeforeUpdate) return res.status(404).json({ success: false, message: 'Order not found.' });
+
+        // If transitioning TO cancelled FROM something else, restore stock
+        if (status === 'cancelled' && orderBeforeUpdate.status !== 'cancelled') {
+            for (const item of orderBeforeUpdate.items) {
+                const product = await Product.findById(item.productId);
+                if (product) {
+                    product.countInStock += item.quantity;
+                    product.inStock = product.countInStock > 0;
+                    await product.save();
+                }
+            }
+        } 
+        // If transitioning FROM cancelled TO something else, deduct stock again
+        else if (status !== 'cancelled' && orderBeforeUpdate.status === 'cancelled') {
+            // Check stock first
+            for (const item of orderBeforeUpdate.items) {
+                const product = await Product.findById(item.productId);
+                if (!product || product.countInStock < item.quantity) {
+                    return res.status(400).json({ success: false, message: `Cannot restore order status. Insufficient stock for ${item.productName}.` });
+                }
+            }
+            // Deduct
+            for (const item of orderBeforeUpdate.items) {
+                const product = await Product.findById(item.productId);
+                product.countInStock -= item.quantity;
+                product.inStock = product.countInStock > 0;
+                await product.save();
+            }
+        }
+
         const order = await Order.findByIdAndUpdate(
             req.params.id,
             { status },
             { new: true }
         );
-        if (!order) return res.status(404).json({ success: false, message: 'Order not found.' });
 
         res.json({ success: true, order });
     } catch (err) {
@@ -166,8 +223,23 @@ exports.updateOrderStatus = async (req, res) => {
 // DELETE /api/orders/:id — admin only
 exports.deleteOrder = async (req, res) => {
     try {
+        const order = await Order.findById(req.params.id);
+        if (!order) return res.status(404).json({ success: false, message: 'Order not found.' });
+
+        // Restore stock if it wasn't already cancelled
+        if (order.status !== 'cancelled') {
+            for (const item of order.items) {
+                const product = await Product.findById(item.productId);
+                if (product) {
+                    product.countInStock += item.quantity;
+                    product.inStock = product.countInStock > 0;
+                    await product.save();
+                }
+            }
+        }
+
         await Order.findByIdAndDelete(req.params.id);
-        res.json({ success: true, message: 'Order deleted.' });
+        res.json({ success: true, message: 'Order deleted and stock restored.' });
     } catch (err) {
         res.status(500).json({ success: false, message: 'Failed to delete order.' });
     }
