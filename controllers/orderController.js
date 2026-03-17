@@ -11,32 +11,6 @@ exports.createOrder = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Customer name, email, address and at least one item are required.' });
         }
 
-        // 1. Validate Stock Availability & Prepare Deductions
-        for (const item of items) {
-            const product = await Product.findById(item.productId);
-            if (!product) {
-                return res.status(404).json({ success: false, message: `Product ${item.productName} not found.` });
-            }
-            if (product.countInStock < item.quantity) {
-                return res.status(400).json({ 
-                    success: false, 
-                    message: `Insufficient stock for ${product.name}. Available: ${product.countInStock}` 
-                });
-            }
-        }
-
-        // 2. Actually Deduct Stock
-        for (const item of items) {
-            await Product.findByIdAndUpdate(item.productId, {
-                $inc: { countInStock: -item.quantity },
-                // We'll calculate the new inStock in the next step or just trust countInStock logic added to controllers
-            });
-            // Update inStock status manually here to be safe
-            const updatedProduct = await Product.findById(item.productId);
-            updatedProduct.inStock = updatedProduct.countInStock > 0;
-            await updatedProduct.save();
-        }
-
         const order = await Order.create({
             userId: req.user?._id || null,
             customerName,
@@ -179,8 +153,68 @@ exports.updateOrderStatus = async (req, res) => {
         const orderBeforeUpdate = await Order.findById(req.params.id);
         if (!orderBeforeUpdate) return res.status(404).json({ success: false, message: 'Order not found.' });
 
-        // If transitioning TO cancelled FROM something else, restore stock
-        if (status === 'cancelled' && orderBeforeUpdate.status !== 'cancelled') {
+        const activeStates = ['processing', 'completed'];
+        const wasActive = activeStates.includes(orderBeforeUpdate.status);
+        const willBeActive = activeStates.includes(status);
+
+        // Transition: Inactive -> Active (Deduct Stock)
+        if (!wasActive && willBeActive) {
+            // Check stock first for all items
+            for (const item of orderBeforeUpdate.items) {
+                const product = await Product.findById(item.productId);
+                if (!product || product.countInStock < item.quantity) {
+                    return res.status(400).json({ 
+                        success: false, 
+                        message: `Insufficient stock for ${item.productName}. Required: ${item.quantity}, Available: ${product?.countInStock || 0}` 
+                    });
+                }
+            }
+            // Deduct
+            for (const item of orderBeforeUpdate.items) {
+                const product = await Product.findById(item.productId);
+                const wasInStock = product.countInStock > 0;
+                product.countInStock -= item.quantity;
+                product.inStock = product.countInStock > 0;
+                await product.save();
+
+                // Trigger Out of Stock Notification if now hit 0
+                if (wasInStock && product.countInStock === 0) {
+                    const notifyOutOfStock = async () => {
+                        try {
+                            const User = require('../models/User');
+                            const users = await User.find({}).select('email');
+                            const emails = users.map(u => u.email).filter(e => e);
+                            const uniqueEmails = [...new Set(emails)];
+                            if (uniqueEmails.length > 0) {
+                                await sendEmail({
+                                    to: process.env.FROM_EMAIL || process.env.SMTP_USER,
+                                    bcc: uniqueEmails,
+                                    subject: `Inventory Alert: ${product.name} is Out of Stock`,
+                                    html: `
+                                        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #eee; padding: 20px; border-radius: 10px;">
+                                            <h2 style="color: #e53e3e; text-align: center;">Item Sold Out!</h2>
+                                            <p style="font-size: 16px; color: #333; text-align: center;">
+                                                I am out of stock, but I will be back soon!
+                                            </p>
+                                            <div style="background: #f7fafc; padding: 15px; border-radius: 8px; margin-top: 20px; border-left: 4px solid #e53e3e;">
+                                                <p style="margin: 0;"><strong>Product:</strong> ${product.name}</p>
+                                                <p style="margin: 5px 0 0;"><strong>Description:</strong> ${product.description}</p>
+                                            </div>
+                                            <p style="font-size: 14px; color: #718096; margin-top: 25px; text-align: center;">
+                                                We'll notify you as soon as this item is back in stock.
+                                            </p>
+                                        </div>
+                                    `
+                                });
+                            }
+                        } catch (err) { console.error('Email failed:', err); }
+                    };
+                    notifyOutOfStock();
+                }
+            }
+        } 
+        // Transition: Active -> Inactive (Restore Stock)
+        else if (wasActive && !willBeActive) {
             for (const item of orderBeforeUpdate.items) {
                 const product = await Product.findById(item.productId);
                 if (product) {
@@ -188,23 +222,6 @@ exports.updateOrderStatus = async (req, res) => {
                     product.inStock = product.countInStock > 0;
                     await product.save();
                 }
-            }
-        } 
-        // If transitioning FROM cancelled TO something else, deduct stock again
-        else if (status !== 'cancelled' && orderBeforeUpdate.status === 'cancelled') {
-            // Check stock first
-            for (const item of orderBeforeUpdate.items) {
-                const product = await Product.findById(item.productId);
-                if (!product || product.countInStock < item.quantity) {
-                    return res.status(400).json({ success: false, message: `Cannot restore order status. Insufficient stock for ${item.productName}.` });
-                }
-            }
-            // Deduct
-            for (const item of orderBeforeUpdate.items) {
-                const product = await Product.findById(item.productId);
-                product.countInStock -= item.quantity;
-                product.inStock = product.countInStock > 0;
-                await product.save();
             }
         }
 
@@ -226,8 +243,9 @@ exports.deleteOrder = async (req, res) => {
         const order = await Order.findById(req.params.id);
         if (!order) return res.status(404).json({ success: false, message: 'Order not found.' });
 
-        // Restore stock if it wasn't already cancelled
-        if (order.status !== 'cancelled') {
+        // Restore stock only if the order was already in an active status (processing/completed)
+        const activeStates = ['processing', 'completed'];
+        if (activeStates.includes(order.status)) {
             for (const item of order.items) {
                 const product = await Product.findById(item.productId);
                 if (product) {
