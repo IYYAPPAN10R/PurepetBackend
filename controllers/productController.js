@@ -65,6 +65,11 @@ exports.getProduct = async (req, res) => {
 // @access Private/Admin
 exports.createProduct = async (req, res) => {
     try {
+        // Auto-set inStock based on countInStock
+        if (req.body.countInStock !== undefined) {
+            req.body.inStock = req.body.countInStock > 0;
+        }
+
         const product = await Product.create(req.body);
 
         // Notify all users asynchronously
@@ -79,7 +84,6 @@ exports.createProduct = async (req, res) => {
                         const clientUrl = process.env.CLIENT_URL || 'https://purepetfrontend.onrender.com';
                         const productUrl = `${clientUrl}/products`;
 
-                        // Construct Price String (If the schema handles price later or if passed in req.body.price but not saved)
                         const priceDisplay = req.body.price ? `$${req.body.price}` : 'Contact for Pricing';
 
                         const emailHtml = `
@@ -103,8 +107,8 @@ exports.createProduct = async (req, res) => {
                         `;
 
                         await sendEmail({
-                            to: process.env.FROM_EMAIL || process.env.SMTP_USER, // Self
-                            bcc: uniqueEmails, // Bcc all users to prevent showing their emails to others
+                            to: process.env.FROM_EMAIL || process.env.SMTP_USER,
+                            bcc: uniqueEmails,
                             subject: `New Product Added: ${product.name}`,
                             html: emailHtml
                         });
@@ -115,7 +119,6 @@ exports.createProduct = async (req, res) => {
             }
         };
 
-        // Fire and forget
         notifyUsers();
 
         res.status(201).json({ success: true, message: 'Product created!', product });
@@ -129,11 +132,57 @@ exports.createProduct = async (req, res) => {
 // @access Private/Admin
 exports.updateProduct = async (req, res) => {
     try {
+        const productBeforeUpdate = await Product.findById(req.params.id);
+        if (!productBeforeUpdate) return res.status(404).json({ success: false, message: 'Product not found.' });
+
+        // Auto-set inStock based on countInStock
+        if (req.body.countInStock !== undefined) {
+            req.body.inStock = Number(req.body.countInStock) > 0;
+        }
+
         const product = await Product.findByIdAndUpdate(req.params.id, req.body, {
             new: true,
             runValidators: true,
         });
-        if (!product) return res.status(404).json({ success: false, message: 'Product not found.' });
+
+        // Check if item just went out of stock
+        if (product.countInStock === 0 && productBeforeUpdate.countInStock > 0) {
+            const notifyOutOfStock = async () => {
+                try {
+                    const users = await User.find({}).select('email');
+                    const emails = users.map(u => u.email).filter(e => e);
+                    const uniqueEmails = [...new Set(emails)];
+
+                    if (uniqueEmails.length > 0) {
+                        const emailHtml = `
+                            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px;">
+                                <div style="background-color: #f44336; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0;">
+                                    <h2 style="margin: 0;">Stock Update: ${product.name}</h2>
+                                </div>
+                                <div style="padding: 20px; text-align: center;">
+                                    <h3>I am out of stock, but I will be back soon!</h3>
+                                    ${product.image ? `<img src="${product.image}" alt="${product.name}" style="max-width: 150px; margin: 20px 0;">` : ''}
+                                    <p style="color: #666;">We've temporarily run out of <strong>${product.name}</strong>. Don't worry, we are working hard to restock it as quickly as possible!</p>
+                                    <p style="color: #888; font-size: 14px;">We'll notify you once it's available again.</p>
+                                </div>
+                            </div>
+                        `;
+
+                        await sendEmail({
+                            to: process.env.FROM_EMAIL || process.env.SMTP_USER,
+                            bcc: uniqueEmails,
+                            subject: `Update: ${product.name} is currently Out of Stock`,
+                            html: emailHtml
+                        });
+                        console.log(`Out of stock notification sent for ${product.name}`);
+                    }
+                } catch (err) {
+                    console.error('Failed to send out of stock notification:', err);
+                }
+            };
+            notifyOutOfStock();
+        }
+
         res.status(200).json({ success: true, message: 'Product updated!', product });
     } catch (err) {
         res.status(400).json({ success: false, message: err.message });

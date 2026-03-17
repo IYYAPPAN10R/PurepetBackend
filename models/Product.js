@@ -34,6 +34,7 @@ const productSchema = new mongoose.Schema(
         },
         features: [{ type: String }],
         inStock: { type: Boolean, default: true },
+        countInStock: { type: Number, default: 0, min: 0 },
         weight: { type: String, default: '' },
         dimensions: { type: String, default: '' },
         color: { type: String, default: 'Clear / Transparent' },
